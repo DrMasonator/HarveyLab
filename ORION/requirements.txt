@@ -1,0 +1,6 @@
+numpy
+PyQt5
+pyqtgraph
+matplotlib
+# pylablib # Hardware control
+# ids-peak # Hardware control
