@@ -3,3 +3,5 @@
 /.venv
 /MEMS Experiments
 /plots
+ __pycache__/
+ *.pyc
