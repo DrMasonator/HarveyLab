@@ -24,6 +24,7 @@ class CausticPage(QtWidgets.QWidget):
         # State
         self.current_z = 0.0
         self.expecting_measurement = False
+        self.current_state = "LIVE"
         
         self.init_ui()
         self.init_connections()
@@ -98,14 +99,13 @@ class CausticPage(QtWidgets.QWidget):
         self.spin_step.setSingleStep(0.01)
         self.spin_step.setSuffix(" mm")
         
-        self.btn_start_scan = QtWidgets.QPushButton("Start Scan")
-        
         scan_layout.addRow("Start Z:", self.spin_start)
         scan_layout.addRow("End Z:", self.spin_end)
         scan_layout.addRow("Step:", self.spin_step)
         
         hbox_scan = QtWidgets.QHBoxLayout()
         self.btn_start_scan = QtWidgets.QPushButton("Manual Scan")
+        self.btn_start_scan.setToolTip("Run scan across Start/End Z and auto-measure each point")
         
         hbox_scan.addWidget(self.btn_start_scan)
         
@@ -113,6 +113,8 @@ class CausticPage(QtWidgets.QWidget):
         
         self.btn_stop = QtWidgets.QPushButton("STOP")
         self.btn_stop.setProperty("class", "danger")
+        self.btn_stop.setEnabled(False)
+        self.btn_stop.setToolTip("Stop active search/scan")
         scan_layout.addRow(self.btn_stop)
         
         ctrl_layout.addWidget(scan_group)
@@ -127,6 +129,7 @@ class CausticPage(QtWidgets.QWidget):
         self.spin_move_z.setDecimals(3)
         
         self.btn_go_z = QtWidgets.QPushButton("Go")
+        self.btn_go_z.setToolTip("Move stage to selected Z")
         
         move_layout.addWidget(self.spin_move_z)
         move_layout.addWidget(self.btn_go_z)
@@ -137,8 +140,8 @@ class CausticPage(QtWidgets.QWidget):
         table_group = QtWidgets.QGroupBox("Measurements")
         table_layout = QtWidgets.QVBoxLayout(table_group)
         self.table = QtWidgets.QTableWidget()
-        self.table.setColumnCount(3)
-        self.table.setHorizontalHeaderLabels(["Z [mm]", "Dx [mm]", "Dy [mm]"])
+        self.table.setColumnCount(4)
+        self.table.setHorizontalHeaderLabels(["Z [mm]", "Dx [mm]", "Dy [mm]", "Deff [mm]"])
         header = self.table.horizontalHeader()
         header.setSectionResizeMode(QtWidgets.QHeaderView.Stretch)
         table_layout.addWidget(self.table)
@@ -199,12 +202,11 @@ class CausticPage(QtWidgets.QWidget):
         self.btn_go_z.clicked.connect(self.on_go_z)
         
         self.worker.stats_update.connect(self.on_stats_update)
-        
-        self.worker.stats_update.connect(self.on_stats_update)
-        
+        self.worker.state_changed.connect(self.on_state_changed)
         self.worker.overlay_update.connect(self.handle_overlay_update)
         self.worker.one_shot_finished.connect(self.handle_oneshot_finished)
         self.worker.measurement_taken.connect(self.handle_measurement_taken)
+        self.on_state_changed("LIVE")
         
     def on_stats_update(self, max_val, d4s, z_pos, exposure):
         self.current_z = z_pos
@@ -250,6 +252,25 @@ class CausticPage(QtWidgets.QWidget):
     def on_go_z(self):
         val = self.spin_move_z.value()
         self.worker.set_target_z(val)
+
+    def on_state_changed(self, state: str):
+        self.current_state = state
+        busy = state in {"MEASURING", "SEARCHING", "SCANNING", "STOPPING"}
+        reason = f"Disabled while {state.lower()}." if busy else ""
+        self.btn_measure.setEnabled(not busy)
+        self.btn_measure.setToolTip(reason or "Measure and add one point at current Z")
+        self.btn_start_scan.setEnabled(not busy)
+        self.btn_start_scan.setToolTip(reason or "Run scan across Start/End Z and auto-measure each point")
+        self.btn_go_z.setEnabled(not busy)
+        self.btn_go_z.setToolTip(reason or "Move stage to selected Z")
+        self.spin_move_z.setEnabled(not busy)
+        self.spin_start.setEnabled(not busy)
+        self.spin_end.setEnabled(not busy)
+        self.spin_step.setEnabled(not busy)
+        self.btn_clear.setEnabled(not busy)
+        self.btn_clear.setToolTip(reason or "Clear all measured points and fits")
+        self.btn_stop.setEnabled(busy)
+        self.btn_stop.setToolTip("Stop active search/scan")
 
     def handle_measurement_taken(self, z, d_eff, d_x, d_y):
         if self.worker.mode == WorkerMode.SEARCH:

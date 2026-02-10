@@ -150,10 +150,11 @@ class MockLaserSystem(LaserSystem):
         
         self.img_width = 1284
         self.img_height = 964
+        # self.img_width = 5136
+        # self.img_height = 3856
         x = np.arange(0, self.img_width)
         y = np.arange(0, self.img_height)
         self.xx, self.yy = np.meshgrid(x, y)
-        self.cx, self.cy = self.img_width / 2, self.img_height / 2
         self.cx, self.cy = self.img_width / 2, self.img_height / 2
         
         # Pre-calculating relative coordinates for speed

@@ -56,7 +56,8 @@ class ImagingPage(QtWidgets.QWidget):
         # 2. Side Plots Area (Right)
         self.plot_container = pg.GraphicsLayoutWidget()
         self.plot_container.setBackground(HEX_BG_DARK)
-        self.plot_container.setFixedWidth(300) # Fixed width side panel
+        self.plot_container.setMinimumWidth(240)
+        self.plot_container.setMaximumWidth(420)
         
         # Major Axis Plot
         self.p_major = self.plot_container.addPlot(title="Major Axis")
@@ -80,6 +81,7 @@ class ImagingPage(QtWidgets.QWidget):
         self.top_splitter.addWidget(self.plot_container)
         self.top_splitter.setStretchFactor(0, 3) # Image gets 3 parts
         self.top_splitter.setStretchFactor(1, 1) # Plots get 1 part
+        self.top_splitter.setSizes([900, 320])
         
         layout.addWidget(self.top_splitter, stretch=16)
 
@@ -90,36 +92,16 @@ class ImagingPage(QtWidgets.QWidget):
         self.readouts = ReadoutWidget()
         self.controls = MotorControlWidget()
         
-        # Move the image's "Menu" (Export/View options) to the bottom panel
-        btns_layout = QtWidgets.QHBoxLayout()
-        
-        self.btn_home = QtWidgets.QPushButton("Reset View")
-        self.btn_home.setFixedWidth(100)
-        self.btn_home.clicked.connect(self.reset_view)
-        
-        self.btn_img_menu = QtWidgets.QPushButton("Display Opts")
-        self.btn_img_menu.setFixedWidth(100)
-        self.btn_img_menu.clicked.connect(self.imv.ui.menuBtn.click)
-
-        # Style these buttons to match MotorControlWidget
-        self.btn_img_menu.clicked.connect(self.imv.ui.menuBtn.click)
-        
-        # Style implicitly handled by global theme
-        
-        btns_layout.addWidget(self.btn_home)
-        btns_layout.addWidget(self.btn_img_menu)
-        
-        bottom_panel.addWidget(self.readouts)
-        bottom_panel.addWidget(self.controls)
-        
-        # Add the control buttons on the far right
-        bottom_panel.addStretch()
-        bottom_panel.addLayout(btns_layout)
+        self.readouts.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Preferred)
+        self.controls.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Preferred)
+        bottom_panel.addWidget(self.readouts, 1)
+        bottom_panel.addWidget(self.controls, 2)
         
         # 3. Connections
         self.worker.new_image.connect(self.update_image)
         self.worker.stats_update.connect(self.update_stats)
         self.worker.status_msg.connect(self.update_status_msg)
+        self.worker.state_changed.connect(self.on_state_changed)
         self.worker.measurement_taken.connect(self.add_plot_point)
         self.worker.one_shot_finished.connect(self.on_one_shot_finished)
         self.worker.overlay_update.connect(self.draw_beam_overlay)
@@ -136,17 +118,20 @@ class ImagingPage(QtWidgets.QWidget):
         # Connect indicator toggle
         self.controls.check_overlay.stateChanged.connect(self.on_overlay_toggled)
 
+        QtWidgets.QShortcut(QtGui.QKeySequence("Ctrl+F"), self, activated=self.on_find_beam)
+        QtWidgets.QShortcut(QtGui.QKeySequence("Ctrl+M"), self, activated=self.on_measure_clicked)
+
         self.search_points_z = []
         self.search_points_d = []
         self.last_d4s_um = 0.0 
         self.current_z_read = 0.0
-        self.target_z = 0.0
         self.target_z = 0.0
         self.safe_limit = 12.0
         self._is_safe_set = False
         
         self.beam_overlay = None
         self.last_beam_params = None
+        self.set_ui_state("LIVE")
 
     def on_overlay_toggled(self, checked):
         if not self.beam_overlay:
@@ -160,12 +145,6 @@ class ImagingPage(QtWidgets.QWidget):
             self.beam_overlay.show()
         else:
             self.beam_overlay.hide()
-
-    def reset_view(self):
-        """Helper to quickly snap back to full sensor frame."""
-        if hasattr(self, '_prev_shape'):
-            h, w = self._prev_shape
-            self.vb.setRange(QtCore.QRectF(0, 0, w, h), padding=0.1)
 
     def update_image(self, img):
         if img is None:
@@ -198,6 +177,30 @@ class ImagingPage(QtWidgets.QWidget):
 
     def update_status_msg(self, msg):
         self.readouts.update_status(msg)
+
+    def on_state_changed(self, state: str):
+        self.set_ui_state(state)
+
+    def set_ui_state(self, state: str):
+        busy = state in {"MEASURING", "SEARCHING", "SCANNING", "STOPPING"}
+        reason = f"Disabled while {state.lower()}." if busy else ""
+        self.controls.btn_find_beam.setEnabled(not busy)
+        self.controls.btn_find_beam.setToolTip(reason or "Measure once and center the beam in view")
+        self.controls.btn_find_focus.setEnabled(not busy)
+        self.controls.btn_find_focus.setToolTip(reason or "Run autofocus search between 0 and Safe Z")
+        self.controls.btn_measure.setEnabled(not busy)
+        self.controls.btn_measure.setToolTip(reason or "Take one beam measurement")
+        self.controls.btn_back.setEnabled(not busy)
+        self.controls.btn_back.setToolTip(reason or "Jog backward by selected Z-step")
+        self.controls.btn_fwd.setEnabled(not busy)
+        self.controls.btn_fwd.setToolTip(reason or "Jog forward by selected Z-step")
+        self.controls.btn_set_safe.setEnabled(not busy)
+        self.controls.btn_set_safe.setToolTip(reason or "Set current position as max safe travel")
+        self.controls.btn_reset_safe.setEnabled(not busy)
+        self.controls.btn_reset_safe.setToolTip(reason or "Reset Safe Limit")
+        self.controls.txt_move_z.setEnabled(not busy)
+        self.controls.txt_move_z.setToolTip(reason or "Target Z position in mm")
+        self.controls.combo_step.setEnabled(not busy)
 
     def on_move_to_requested(self, val):
         if val < 0: val = 0.0
@@ -255,15 +258,14 @@ class ImagingPage(QtWidgets.QWidget):
             cx, cy, w, h, angle = self.last_beam_params
             self.update_profiles(cx, cy, w, h, angle)
 
-        # If we were searching and it failed (d=0), help the user
+        # If Find Beam is active, only clear the flag on failure.
+        # On success, overlay_update will arrive right after this and perform centering.
         if getattr(self, '_auto_center_requested', False):
             if "D4s: 0.0" in msg:
                 QtWidgets.QMessageBox.warning(self, "Find Beam", "Could not find a beam in the current frame. Check alignment or exposure.")
-            self._auto_center_requested = False
+                self._auto_center_requested = False
         else:
-            # Show explicit popup
             self.update_status_msg(msg)
-            QtWidgets.QMessageBox.information(self, "Measurement Result", msg)
 
     def add_plot_point(self, z, d, dx, dy):
         pass # Handle in Caustic page if needed
@@ -275,23 +277,29 @@ class ImagingPage(QtWidgets.QWidget):
             draw_w, draw_h = h, w
 
         self.last_beam_params = (cx, cy, w, h, angle_deg)
-        
-        if not self.controls.check_overlay.isChecked():
-            return
-            
-        # 1. Clear old overlay
+
+        # 1. AUTO-CENTER / AUTO-ZOOM (must run regardless of overlay visibility)
+        if auto_zoom and getattr(self, '_auto_center_requested', False):
+            self._auto_center_requested = False
+            self.center_beam_in_view(cx, cy, draw_w, draw_h)
+
+        # 2. Clear old overlay
         if self.beam_overlay:
             try:
                 self.vb.removeItem(self.beam_overlay)
             except: pass
             self.beam_overlay = None
 
-        if draw_w <= 0 or draw_h <= 0: return
+        if not self.controls.check_overlay.isChecked():
+            return
 
-        # 2. Draw Red Ellipse
+        if draw_w <= 0 or draw_h <= 0:
+            return
+
+        # 3. Draw Green Ellipse
         rect = QtCore.QRectF(-draw_w/2, -draw_h/2, draw_w, draw_h)
         self.beam_overlay = QtWidgets.QGraphicsEllipseItem(rect)
-        pen = QtGui.QPen(QtGui.QColor(255, 50, 50)) # Bright Red
+        pen = QtGui.QPen(QtGui.QColor(0, 255, 120)) # Bright Green
         pen.setWidth(1)
         pen.setCosmetic(True)
         self.beam_overlay.setPen(pen)
@@ -302,29 +310,26 @@ class ImagingPage(QtWidgets.QWidget):
         self.beam_overlay.setTransform(tr)
         self.vb.addItem(self.beam_overlay)
 
-        # 3. AUTO-CENTER / AUTO-ZOOM
-        if auto_zoom and getattr(self, '_auto_center_requested', False):
-            self._auto_center_requested = False
-            
-            # 3x scale around the beam
-            zw, zh = draw_w * 3.0, draw_h * 3.0
-            # Calculate bounds
-            x_min, x_max = cx - zw/2, cx + zw/2
-            y_min, y_max = cy - zh/2, cy + zh/2
-            
-            # Unlock aspect to force exact coordinate zoom, then lock it back
-            def exec_zoom():
-                self.vb.setAspectLocked(False)
-                self.vb.enableAutoRange(enable=False)
-                self.vb.setXRange(x_min, x_max, padding=0)
-                self.vb.setYRange(y_min, y_max, padding=0)
-                self.vb.setAspectLocked(True)
-                self.update_status_msg(f"Beam Locked: {cx:.1f}, {cy:.1f}")
-                
-            QtCore.QTimer.singleShot(0, exec_zoom)
-
         # 4. Update Profile Plots
         self.update_profiles(cx, cy, draw_w, draw_h, angle_deg)
+
+    def center_beam_in_view(self, cx, cy, w, h):
+        # Fit roughly +/-3 sigma around beam center (about 6 sigma total view).
+        # Note: D4sigma diameter = 4*sigma, so 6*sigma span ~= 1.5 * D4sigma.
+        beam_span = max(float(w), float(h), 1.0)
+        span = max(120.0, beam_span * 1.5)
+        x_min, x_max = cx - span / 2.0, cx + span / 2.0
+        y_min, y_max = cy - span / 2.0, cy + span / 2.0
+
+        def exec_zoom():
+            self.vb.setAspectLocked(False)
+            self.vb.enableAutoRange(enable=False)
+            self.vb.setXRange(x_min, x_max, padding=0.02)
+            self.vb.setYRange(y_min, y_max, padding=0.02)
+            self.vb.setAspectLocked(True)
+            self.update_status_msg(f"Beam centered: {cx:.1f}, {cy:.1f}")
+
+        QtCore.QTimer.singleShot(0, exec_zoom)
     
     def update_profiles(self, cx, cy, w, h, angle_deg):
         """
@@ -442,4 +447,3 @@ class ImagingPage(QtWidgets.QWidget):
         
         self.curve_minor_raw.setData(x_minor, prof_minor)
         self.curve_minor_fit.setData(x_minor_smooth, fit_minor)
-

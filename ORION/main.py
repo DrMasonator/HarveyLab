@@ -1,6 +1,6 @@
 import sys
 import argparse
-from PyQt5 import QtWidgets, QtCore, QtGui
+from PyQt5 import QtWidgets
 import pyqtgraph as pg
 
 from ORION.config import Config
@@ -14,34 +14,27 @@ class MainWindow(QtWidgets.QMainWindow):
         super().__init__()
         self.system = system
         self.config = config
-        
-        self.system = system
-        self.config = config
-        
+
         self.worker = HardwareWorker(system, config)
         self.worker.start()
-        
+
         self.setWindowTitle("ORION: Laser Alignment System")
         self.resize(1000, 800)
-        
-        self.setWindowTitle("ORION: Laser Alignment System")
-        self.resize(1000, 800)
-        
+
         self.init_menu()
-        
+
         self.stack = QtWidgets.QStackedWidget()
         self.setCentralWidget(self.stack)
-        
-        
+
         # Shared system/worker access
         sys_list = [self.system, self.worker]
-        
+
         self.imaging_page = ImagingPage(sys_list, config)
         self.stack.addWidget(self.imaging_page)
-        
+
         self.caustic_page = CausticPage(sys_list, config)
         self.stack.addWidget(self.caustic_page)
-        
+
         self.mems_page = QtWidgets.QWidget()
         layout = QtWidgets.QVBoxLayout(self.mems_page)
         layout.addWidget(QtWidgets.QLabel("MEMS Control Page - Coming Soon"))
@@ -49,10 +42,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def init_menu(self):
         menubar = self.menuBar()
-        
-    def init_menu(self):
-        menubar = self.menuBar()
-        
+
         orion_menu = menubar.addMenu("ORION")
         orion_menu.addAction("New")
         orion_menu.addAction("Reset", self.on_reset)

@@ -2,6 +2,7 @@ import numpy as np
 import time
 import os
 import csv
+from pathlib import Path
 from datetime import datetime
 import matplotlib
 matplotlib.use('Agg')
@@ -11,6 +12,7 @@ from ORION.config import Config
 from ORION.src.drivers.hardware import LaserSystem
 from ORION.src.core.analysis import BeamAnalyzer
 from ORION.src.core.processing import ImageProcessor, ExposureController
+from ORION.src.core.roi import ROIManager
 
 class MeasurementOrchestrator:
     def __init__(self, config: Config, system: LaserSystem, 
@@ -22,52 +24,96 @@ class MeasurementOrchestrator:
         self.processor = processor
         self.exposure_ctrl = exposure_ctrl
         self.worker = worker # Reference for signal emitting if needed
+        self.roi = ROIManager(config)
 
-    def robust_measure_optical(self) -> tuple:
+    def robust_measure_optical(self, *, skip_ae: bool = False, average_count: int | None = None) -> tuple:
         """
-        AE stabilization + Median Averaging.
-        Returns (d4s_eff, d4s_x, d4s_y, azimuth, cx, cy, w_px, h_px).
+        AE stabilization + Median Averaging with dynamic ROI lock.
+        Returns (d4s_eff, d4s_x, d4s_y, azimuth, cx_global, cy_global, w_px, h_px).
         """
-        # Stabilize Exposure
-        for _ in range(10): 
-             if self.worker and self.worker.stop_requested: return (0,0,0,0,0,0,0,0)
-             img = self.system.get_raw_image()
-             if img is None: continue
-             proc_img, v_size = self.processor.process_image(img)
-             mx = np.max(proc_img)
-             changed = self.exposure_ctrl.handle_auto_exposure(mx)
-             
-             if self.worker:
-                 self.worker.new_image.emit(proc_img)
-                 self.worker.stats_update.emit(float(mx), float(self.worker.cached_d4s), 
-                                              float(self.system.current_position), 
-                                              float(self.system.current_exposure))
-                                   
-             if not changed: break
-             time.sleep(0.05)
+        if not skip_ae:
+            # Stabilize Exposure
+            for _ in range(10):
+                 if self.worker and self.worker.stop_requested: return (0,0,0,0,0,0,0,0)
+                 img = self.system.get_raw_image()
+                 if img is None: continue
+                 proc_img, v_size = self.processor.process_image(img)
+                 mx = np.max(proc_img)
+                 changed = self.exposure_ctrl.handle_auto_exposure(mx)
+                 
+                 if self.worker:
+                     self.worker.new_image.emit(proc_img)
+                     self.worker.stats_update.emit(float(mx), float(self.worker.cached_d4s), 
+                                                  float(self.system.current_position), 
+                                                  float(self.system.current_exposure))
+                                       
+                 if not changed: break
+                 time.sleep(0.05)
 
         # Acquire Data
         l_d4s, l_dx, l_dy, l_phi = [], [], [], []
         l_cx, l_cy, l_wpx, l_hpx = [], [], [], []
 
-        for _ in range(self.config.MEASURE_AVERAGE_COUNT):
+        sample_count = average_count if average_count is not None else self.config.MEASURE_AVERAGE_COUNT
+        for _ in range(sample_count):
             if self.worker and self.worker.stop_requested: return (0,0,0,0,0,0,0,0)
             img = self.system.get_raw_image()
             if img is None: continue
             proc_img, v_size = self.processor.process_image(img)
-            mx = np.max(proc_img)
-            res = self.analyzer.analyze_beam(proc_img, mx, v_size)
+            for _ in range(3):
+                roi_img, (x0, y0) = self.roi.get_crop(proc_img)
+                roi_max = np.max(roi_img)
+                clipped = False
+                if roi_max > 0:
+                    edge_w = min(8, roi_img.shape[0] // 2, roi_img.shape[1] // 2)
+                    if edge_w > 0:
+                        edge_top = roi_img[:edge_w, :]
+                        edge_bottom = roi_img[-edge_w:, :]
+                        edge_left = roi_img[:, :edge_w]
+                        edge_right = roi_img[:, -edge_w:]
+                        edge_peak = max(
+                            float(np.max(edge_top)),
+                            float(np.max(edge_bottom)),
+                            float(np.max(edge_left)),
+                            float(np.max(edge_right)),
+                        )
+                        edge_mean = max(
+                            float(np.mean(edge_top)),
+                            float(np.mean(edge_bottom)),
+                            float(np.mean(edge_left)),
+                            float(np.mean(edge_right)),
+                        )
+                        if (
+                            edge_peak / float(roi_max) > self.config.ROI_EDGE_PEAK_FRACTION
+                            or edge_mean / float(roi_max) > (self.config.ROI_EDGE_PEAK_FRACTION * 0.25)
+                        ):
+                            clipped = True
+                if clipped:
+                    self.roi.on_border_signal()
+                    continue
+                break
+            res = self.analyzer.analyze_beam(roi_img, roi_max, v_size)
             d = res[0]
             
             if self.worker:
                 self.worker.new_image.emit(proc_img)
-                self.worker.stats_update.emit(float(mx), float(d), 
+                self.worker.stats_update.emit(float(roi_max), float(d), 
                                              float(self.system.current_position), 
                                              float(self.system.current_exposure))
             
             if d > 0:
+                cx_global = float(res[4] + x0)
+                cy_global = float(res[5] + y0)
+                wpx = float(res[6])
+                hpx = float(res[7])
+
+                self.roi.on_measurement(cx_global, cy_global, wpx, hpx)
+                self.roi.maybe_relock_if_near_edge(cx_global, cy_global, (x0, y0), roi_img.shape)
+
                 l_d4s.append(d); l_dx.append(res[1]); l_dy.append(res[2]); l_phi.append(res[3])
-                l_cx.append(res[4]); l_cy.append(res[5]); l_wpx.append(res[6]); l_hpx.append(res[7])
+                l_cx.append(cx_global); l_cy.append(cy_global); l_wpx.append(wpx); l_hpx.append(hpx)
+            else:
+                self.roi.on_miss()
         
         if not l_d4s:
             return (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
@@ -84,12 +130,22 @@ class FocusOptimizer:
 
     def run_golden_section_search(self, start_z, end_z):
         if self.worker: self.worker.status_msg.emit("Starting Auto-Search...")
+        if end_z <= start_z:
+            if self.worker:
+                self.worker.status_msg.emit("Search aborted: invalid range (end <= start).")
+            return
+
         invphi = (np.sqrt(5) - 1) / 2
         invphi2 = (3 - np.sqrt(5)) / 2
         
         a, b = start_z, end_z
         h = b - a
         tol = self.config.SEARCH_TOLERANCE
+        if tol <= 0 or h <= tol:
+            if self.worker:
+                self.worker.status_msg.emit("Search range already within tolerance.")
+            return
+
         n_steps = int(np.ceil(np.log(tol / h) / np.log(invphi)))
 
         c = a + invphi2 * h
@@ -181,7 +237,8 @@ class BeamCharacterizer:
 
     def save_results(self, data):
         if not data: return
-        plot_dir = os.path.join(os.getcwd(), 'plots')
+        project_root = Path(__file__).resolve().parents[2]
+        plot_dir = os.path.join(project_root, 'plots')
         os.makedirs(plot_dir, exist_ok=True)
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         

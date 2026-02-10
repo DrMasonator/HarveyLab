@@ -1,6 +1,7 @@
 import queue
 import time
 import numpy as np
+import traceback
 from PyQt5 import QtCore
 
 from ORION.config import Config
@@ -19,6 +20,7 @@ class HardwareWorker(QtCore.QThread):
     new_image = QtCore.pyqtSignal(object) 
     stats_update = QtCore.pyqtSignal(float, float, float, float) # max_val, d4s_um, z_pos, exposure
     status_msg = QtCore.pyqtSignal(str)
+    state_changed = QtCore.pyqtSignal(str)  # LIVE, MEASURING, SEARCHING, SCANNING, STOPPING, ERROR
     search_finished = QtCore.pyqtSignal(float, float) 
     characterization_finished = QtCore.pyqtSignal(str) 
     measurement_taken = QtCore.pyqtSignal(float, float, float, float) # z, d_eff, d_x, d_y
@@ -32,6 +34,7 @@ class HardwareWorker(QtCore.QThread):
         self.running = True
         self.paused = False
         self.mode = WorkerMode.LIVE
+        self.state = "LIVE"
         
         self.command_queue = queue.Queue()
         self.cached_d4s = 0.0 
@@ -45,6 +48,12 @@ class HardwareWorker(QtCore.QThread):
         self.orchestrator = MeasurementOrchestrator(config, system, self.analyzer, self.processor, self.exposure_ctrl, worker=self)
         self.optimizer = FocusOptimizer(config, system, self.orchestrator, worker=self)
         self.characterizer = BeamCharacterizer(config, system, self.orchestrator, worker=self)
+        self.state_changed.emit(self.state)
+
+    def _set_state(self, state: str):
+        if self.state != state:
+            self.state = state
+            self.state_changed.emit(state)
 
     def set_target_z(self, target_z: float):
         self.target_z = target_z
@@ -64,6 +73,7 @@ class HardwareWorker(QtCore.QThread):
 
     def request_stop(self):
         self.stop_requested = True
+        self._set_state("STOPPING")
         # Clear queue
         with self.command_queue.mutex:
             self.command_queue.queue.clear()
@@ -76,20 +86,28 @@ class HardwareWorker(QtCore.QThread):
                     cmd, val = self.command_queue.get_nowait()
                     if cmd == "SEARCH":
                         self.stop_requested = False
+                        self._set_state("SEARCHING")
                         start_z, end_z = val
                         self.mode = WorkerMode.SEARCH
                         self.optimizer.run_golden_section_search(start_z, end_z)
                         self.mode = WorkerMode.LIVE
+                        self._set_state("LIVE")
                         self.target_z = self.system.current_position
                     elif cmd == "CHARACTERIZE":
                         self.stop_requested = False
+                        self._set_state("SCANNING")
                         scan_points = val
                         self.mode = WorkerMode.CHARACTERIZE
                         self.characterizer.run_characterization_scan(scan_points)
                         self.mode = WorkerMode.LIVE
+                        self._set_state("LIVE")
                         self.target_z = self.system.current_position
                     elif cmd == "MEASURE_ONCE":
-                        res = self.orchestrator.robust_measure_optical()
+                        self._set_state("MEASURING")
+                        res = self.orchestrator.robust_measure_optical(
+                            skip_ae=self.config.FIND_BEAM_SKIP_AE,
+                            average_count=self.config.FIND_BEAM_AVERAGE_COUNT,
+                        )
                         d, dx, dy, phi = res[0], res[1], res[2], res[3]
                         cx, cy, wpx, hpx = res[4], res[5], res[6], res[7]
                         
@@ -100,8 +118,15 @@ class HardwareWorker(QtCore.QThread):
                         if d > 0:
                             self.overlay_update.emit(float(cx), float(cy), float(wpx), float(hpx), float(phi))
                             self.status_msg.emit(f"Measured: {d:.1f}um (Overlay Emitted)")
-            except Exception:
-                pass
+                        self._set_state("LIVE")
+            except Exception as exc:
+                # Keep the worker alive, but never swallow failures silently.
+                self._set_state("ERROR")
+                self.status_msg.emit(f"Worker error: {exc}")
+                traceback.print_exc()
+                time.sleep(0.05)
+                if self.running:
+                    self._set_state("LIVE")
 
             if self.mode == WorkerMode.LIVE:
                 if self.paused:

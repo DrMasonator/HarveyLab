@@ -17,14 +17,14 @@ class Config:
     ABSOLUTE_SATURATION: int = 254
     
     LOW_SIGNAL_THRESHOLD: int = 50
-    
-    LOW_SIGNAL_THRESHOLD: int = 50
-    
+
     # Options: 'RAW', 'RED', 'GREEN', 'BLUE'
     BAYER_MODE: str = 'RED'
     
     NOISE_CUTOFF_PERCENT: float = 0.15
     MEASURE_AVERAGE_COUNT: int = 20
+    FIND_BEAM_AVERAGE_COUNT: int = 5
+    FIND_BEAM_SKIP_AE: bool = True
     
     
     MIN_Z_MM: float = 0.0
@@ -33,3 +33,12 @@ class Config:
     
     SEARCH_WINDOW_MM: float = 0.3
     SEARCH_TOLERANCE: float = 0.0005
+
+    # ROI tracking (processed-image coordinates)
+    ROI_MIN_SIZE_PX: int = 400
+    ROI_MAX_SIZE_PX: int = 2600
+    ROI_SEARCH_BLOCK: int = 16
+    ROI_EXPAND_THRESHOLD: float = 0.65  # Expand if 3*D4s > threshold * ROI
+    ROI_SHRINK_THRESHOLD: float = 0.15  # Shrink if 3*D4s < threshold * ROI
+    ROI_ADAPT_HYSTERESIS_FRAMES: int = 3
+    ROI_EDGE_PEAK_FRACTION: float = 0.03  # Expand if ROI border has >3% of peak

@@ -6,6 +6,25 @@ class BeamAnalyzer:
     def __init__(self, config: Config):
         self.config = config
 
+    @staticmethod
+    def _weighted_moments(weights: np.ndarray) -> tuple[float, float, float, float, float]:
+        """Return total, centroid (x/y), and second moments (u_xx, u_yy) for a weighted 2D map."""
+        h, w = weights.shape
+        row_sums = weights.sum(axis=1, dtype=np.float64)
+        col_sums = weights.sum(axis=0, dtype=np.float64)
+        total = float(row_sums.sum(dtype=np.float64))
+        if total <= 0.0:
+            return 0.0, 0.0, 0.0, 0.0, 0.0
+
+        x_idx = np.arange(w, dtype=np.float64)
+        y_idx = np.arange(h, dtype=np.float64)
+
+        cx = float(np.dot(col_sums, x_idx) / total)
+        cy = float(np.dot(row_sums, y_idx) / total)
+        u_xx = float(np.dot(col_sums, (x_idx - cx) ** 2) / total)
+        u_yy = float(np.dot(row_sums, (y_idx - cy) ** 2) / total)
+        return total, cx, cy, u_xx, u_yy
+
     def analyze_beam(self, img: np.ndarray, max_val: float, virtual_pixel_size: float) -> tuple:
         """
         Calculates beam widths using ISO 11146 2nd moment method.
@@ -19,39 +38,27 @@ class BeamAnalyzer:
             # Use stride of 2 (instead of 4) to prevent aliasing small beams (focus spots).
             # Stride 4 was missing beams < ~5px spread.
             stride = 2
-            data_coarse = img[::stride, ::stride].astype(np.float64)
-            baseline = np.min(data_coarse)
+            data_coarse = img[::stride, ::stride].astype(np.float32, copy=False)
+            baseline = float(np.min(data_coarse))
             data_coarse -= baseline
             
             cutoff = max(5.0, max_val * self.config.NOISE_CUTOFF_PERCENT)
             mask_coarse = data_coarse > cutoff
             
-            found_coarse = np.sum(mask_coarse) >= 5
+            found_coarse = np.count_nonzero(mask_coarse) >= 5
             
             if found_coarse:
-                sh, sw = data_coarse.shape
-                y_grid_s, x_grid_s = np.indices((sh, sw))
-                
-                total_s = np.sum(data_coarse[mask_coarse])
-                # Safe check for div by zero although found_coarse implies > 0
-                if total_s == 0: return (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
-                
-                cx_s = np.sum(x_grid_s[mask_coarse] * data_coarse[mask_coarse]) / total_s
-                cy_s = np.sum(y_grid_s[mask_coarse] * data_coarse[mask_coarse]) / total_s
+                weights_s = np.where(mask_coarse, data_coarse, 0.0)
+                total_s, cx_s, cy_s, u_xx_s, u_yy_s = self._weighted_moments(weights_s)
+                if total_s <= 0.0:
+                    return (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
                 
                 cnt_x = cx_s * stride
                 cnt_y = cy_s * stride
-                
-                # Estimate width from coarse data to set proper initial ROI
-                dx_s = x_grid_s - cx_s
-                dy_s = y_grid_s - cy_s
-                
-                weights_s = data_coarse * mask_coarse # Apply mask
-                # Note: This sigma is calculated ONLY on pixels > cutoff. 
+
+                # Note: This sigma is calculated ONLY on pixels > cutoff.
                 # Real Gaussian wings extend much further. 
                 # This underestimates sigma by ~30-50% depending on cutoff.
-                u_xx_s = np.sum(weights_s * dx_s**2) / total_s
-                u_yy_s = np.sum(weights_s * dy_s**2) / total_s
                 
                 # Apply 4.0x safety factor because the mask cuts off wings drastically
                 dev_x = np.sqrt(u_xx_s) * stride * 4.0
@@ -61,28 +68,27 @@ class BeamAnalyzer:
                 # FALLBACK: Small Beam Detection
                 # If the beam is tiny (e.g. < 4px), stride=4 might skip it.
                 # Check full image, but use sparse calculation to remain fast.
-                data_full = img.astype(np.float64)
+                data_full = img.astype(np.float32, copy=False)
                 # Recalculate baseline on full img to be safe
-                base_full = np.min(data_full)
+                base_full = float(np.min(data_full))
                 data_full -= base_full
                 
                 mask_full = data_full > cutoff
-                if np.sum(mask_full) < 5:
+                if np.count_nonzero(mask_full) < 5:
                     return (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
                 
                 # Use sparse coordinates (argwhere) instead of full grids to save RAM/Time
                 # y_vals, x_vals are indices of pixels > threshold
-                coords = np.argwhere(mask_full)
-                y_vals = coords[:, 0]
-                x_vals = coords[:, 1]
+                y_vals, x_vals = np.nonzero(mask_full)
                 
                 pixel_values = data_full[y_vals, x_vals]
-                total_f = np.sum(pixel_values)
+                pv64 = pixel_values.astype(np.float64, copy=False)
+                total_f = float(np.sum(pv64, dtype=np.float64))
                 
                 if total_f == 0: return (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
                 
-                cnt_x = np.sum(x_vals * pixel_values) / total_f
-                cnt_y = np.sum(y_vals * pixel_values) / total_f
+                cnt_x = float(np.dot(x_vals.astype(np.float64), pv64) / total_f)
+                cnt_y = float(np.dot(y_vals.astype(np.float64), pv64) / total_f)
 
                 # For fallback, small beam default is reasonable
                 dev_x, dev_y = 10.0, 10.0
@@ -96,7 +102,7 @@ class BeamAnalyzer:
                 # Define ROI
                 # Use generous margins to catch wings. 
                 # ISO recommended integration width is >3 times parameter width.
-                margin_factor = 8.0
+                margin_factor = 12.0
                 
                 wx_roi = max(50, margin_factor * dev_x)
                 wy_roi = max(50, margin_factor * dev_y)
@@ -110,7 +116,7 @@ class BeamAnalyzer:
                     break
                     
                 # Slice full resolution data
-                sub_data = img[min_y:max_y, min_x:max_x].astype(np.float64)
+                sub_data = img[min_y:max_y, min_x:max_x].astype(np.float32, copy=False)
                 
                 # CRITICAL FIX: Use GLOBAL baseline, not local.
                 sub_data -= baseline 
@@ -123,34 +129,22 @@ class BeamAnalyzer:
                 # This is typically 5-30 counts, which is safely above read noise (usually 2-3 counts)
                 # but well below the 15% detection threshold (30-40 counts).
                 
-                integration_cutoff = max(5.0, max_val * 0.01) # 1% or 5.0 absolute
-                sub_mask = sub_data > integration_cutoff
-                
-                weights = sub_data * sub_mask
-                
-                total_w = np.sum(weights)
+                integration_cutoff = max(1.0, max_val * 0.002) # 0.2% or 1.0 absolute
+                # Zero out low-signal pixels in-place so moments only use valid signal.
+                sub_data[sub_data <= integration_cutoff] = 0.0
+                total_w, cx_local, cy_local, u_xx, u_yy = self._weighted_moments(sub_data)
                 
                 if total_w == 0: break
-                
-                # Local grids
-                sub_h, sub_w = sub_data.shape
-                loc_y, loc_x = np.indices((sub_h, sub_w))
-                
-                # Local moments
-                cx_local = np.sum(loc_x * weights) / total_w
-                cy_local = np.sum(loc_y * weights) / total_w
                 
                 # Update Global Centroid
                 cnt_x = min_x + cx_local
                 cnt_y = min_y + cy_local
                 
-                # Second moments (Centered)
-                dx = loc_x - cx_local
-                dy = loc_y - cy_local
-                
-                u_xx = np.sum(weights * dx**2) / total_w
-                u_yy = np.sum(weights * dy**2) / total_w
-                u_xy = np.sum(weights * dx * dy) / total_w
+                sub_h, sub_w = sub_data.shape
+                x_idx = np.arange(sub_w, dtype=np.float32)
+                y_idx = np.arange(sub_h, dtype=np.float32)
+                sum_xy = float(y_idx @ sub_data @ x_idx)
+                u_xy = (sum_xy / total_w) - (cx_local * cy_local)
                 
                 dev_x = np.sqrt(u_xx)
                 dev_y = np.sqrt(u_yy)
