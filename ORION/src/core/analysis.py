@@ -39,15 +39,31 @@ class BeamAnalyzer:
             # Stride 4 was missing beams < ~5px spread.
             stride = 2
             data_coarse = img[::stride, ::stride].astype(np.float32, copy=False)
-            baseline = float(np.min(data_coarse))
+            baseline = float(np.median(data_coarse))
             data_coarse -= baseline
-            
-            cutoff = max(5.0, max_val * self.config.NOISE_CUTOFF_PERCENT)
+
+            # Robust noise estimate (MAD) on baseline-subtracted data
+            mad = float(np.median(np.abs(data_coarse)))
+            sigma = 1.4826 * mad
+            peak = float(np.max(data_coarse))
+
+            # Low-signal mode: use local-window analysis instead of global mask
+            min_signal = max(float(self.config.LOW_SIGNAL_THRESHOLD), 6.0 * sigma)
+            low_signal_mode = peak < min_signal
+
+            cutoff = max(5.0, peak * self.config.NOISE_CUTOFF_PERCENT, 6.0 * sigma)
             mask_coarse = data_coarse > cutoff
+
+            # If threshold is too low (mask dominates), tighten it once.
+            if mask_coarse.size > 0:
+                mask_frac = float(np.count_nonzero(mask_coarse)) / float(mask_coarse.size)
+                if mask_frac > 0.5:
+                    cutoff = max(cutoff, peak * 0.7)
+                    mask_coarse = data_coarse > cutoff
             
             found_coarse = np.count_nonzero(mask_coarse) >= 5
             
-            if found_coarse:
+            if found_coarse and not low_signal_mode:
                 weights_s = np.where(mask_coarse, data_coarse, 0.0)
                 total_s, cx_s, cy_s, u_xx_s, u_yy_s = self._weighted_moments(weights_s)
                 if total_s <= 0.0:
@@ -68,30 +84,71 @@ class BeamAnalyzer:
                 # FALLBACK: Small Beam Detection
                 # If the beam is tiny (e.g. < 4px), stride=4 might skip it.
                 # Check full image, but use sparse calculation to remain fast.
-                data_full = img.astype(np.float32, copy=False)
-                # Recalculate baseline on full img to be safe
-                base_full = float(np.min(data_full))
-                data_full -= base_full
-                
-                mask_full = data_full > cutoff
-                if np.count_nonzero(mask_full) < 5:
-                    return (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
-                
-                # Use sparse coordinates (argwhere) instead of full grids to save RAM/Time
-                # y_vals, x_vals are indices of pixels > threshold
-                y_vals, x_vals = np.nonzero(mask_full)
-                
-                pixel_values = data_full[y_vals, x_vals]
-                pv64 = pixel_values.astype(np.float64, copy=False)
-                total_f = float(np.sum(pv64, dtype=np.float64))
-                
-                if total_f == 0: return (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
-                
-                cnt_x = float(np.dot(x_vals.astype(np.float64), pv64) / total_f)
-                cnt_y = float(np.dot(y_vals.astype(np.float64), pv64) / total_f)
+                if low_signal_mode:
+                    # Local-window low-signal analysis around peak
+                    by, bx = np.unravel_index(np.argmax(data_coarse), data_coarse.shape)
+                    cnt_x = float(bx * stride)
+                    cnt_y = float(by * stride)
 
-                # For fallback, small beam default is reasonable
-                dev_x, dev_y = 10.0, 10.0
+                    # Window size tuned for small beams; clamp to image
+                    win = max(25, min(75, min(full_w, full_h) // 8))
+                    half = win // 2
+                    x0 = max(0, int(cnt_x) - half)
+                    y0 = max(0, int(cnt_y) - half)
+                    x1 = min(full_w, x0 + win)
+                    y1 = min(full_h, y0 + win)
+                    x0 = max(0, x1 - win)
+                    y0 = max(0, y1 - win)
+
+                    sub = img[y0:y1, x0:x1].astype(np.float32, copy=False)
+                    sub -= float(np.median(sub))
+                    mad_sub = float(np.median(np.abs(sub)))
+                    sigma_sub = 1.4826 * mad_sub
+                    thr = max(1.0, 3.0 * sigma_sub)
+                    sub[sub < thr] = 0.0
+
+                    total_w, cx_local, cy_local, u_xx, u_yy = self._weighted_moments(sub)
+                    if total_w <= 0.0:
+                        return (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+
+                    cnt_x = x0 + cx_local
+                    cnt_y = y0 + cy_local
+                    dev_x = max(np.sqrt(u_xx), 1.0)
+                    dev_y = max(np.sqrt(u_yy), 1.0)
+                else:
+                    data_full = img.astype(np.float32, copy=False)
+                    # Recalculate baseline and noise on full img to be safe
+                    base_full = float(np.median(data_full))
+                    data_full -= base_full
+
+                    mad_full = float(np.median(np.abs(data_full)))
+                    sigma_full = 1.4826 * mad_full
+                    peak_full = float(np.max(data_full))
+
+                    min_signal_full = max(float(self.config.LOW_SIGNAL_THRESHOLD), 6.0 * sigma_full)
+                    if peak_full < min_signal_full:
+                        return (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+
+                    cutoff_full = max(5.0, peak_full * self.config.NOISE_CUTOFF_PERCENT, 6.0 * sigma_full)
+                    mask_full = data_full > cutoff_full
+                    if np.count_nonzero(mask_full) < 5:
+                        return (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+
+                    # Use sparse coordinates (argwhere) instead of full grids to save RAM/Time
+                    # y_vals, x_vals are indices of pixels > threshold
+                    y_vals, x_vals = np.nonzero(mask_full)
+
+                    pixel_values = data_full[y_vals, x_vals]
+                    pv64 = pixel_values.astype(np.float64, copy=False)
+                    total_f = float(np.sum(pv64, dtype=np.float64))
+
+                    if total_f == 0: return (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+
+                    cnt_x = float(np.dot(x_vals.astype(np.float64), pv64) / total_f)
+                    cnt_y = float(np.dot(y_vals.astype(np.float64), pv64) / total_f)
+
+                    # For fallback, small beam default is reasonable
+                    dev_x, dev_y = 10.0, 10.0
             
             d4s_x_px, d4s_y_px = 0.0, 0.0
             azimuth_deg = 0.0
@@ -168,6 +225,11 @@ class BeamAnalyzer:
                     d4s_y_px = d1
 
             d4s_eff_px = np.sqrt(d4s_x_px * d4s_y_px)
+
+            # Sanity clamp: reject pathological widths that span (almost) the whole sensor
+            max_reasonable = 0.9 * float(min(full_w, full_h))
+            if d4s_x_px > max_reasonable or d4s_y_px > max_reasonable:
+                return (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
             
             pixel_um = virtual_pixel_size
             return (d4s_eff_px * pixel_um, d4s_x_px * pixel_um, d4s_y_px * pixel_um, azimuth_deg,

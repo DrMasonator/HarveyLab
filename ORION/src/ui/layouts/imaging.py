@@ -348,6 +348,13 @@ class ImagingPage(QtWidgets.QWidget):
         
         region_w = w * 4.0 if w > 0 else 50
         region_h = h * 4.0 if h > 0 else 50
+
+        # Clamp integration region to the image size to avoid huge allocations
+        img_h, img_w = img.shape
+        region_w = min(region_w, float(img_w))
+        region_h = min(region_h, float(img_h))
+        if region_w < 5 or region_h < 5:
+            return
         
         # We need a PyqtGraph ROI to do the extraction math easily
         # Pos is bottom-left of the unrotated rect.
