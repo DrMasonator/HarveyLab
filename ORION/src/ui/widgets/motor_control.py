@@ -10,6 +10,7 @@ class MotorControlWidget(QtWidgets.QGroupBox):
     step_requested = QtCore.pyqtSignal(float) # -1.0 or 1.0 direction
     set_safe_requested = QtCore.pyqtSignal()
     reset_safe_requested = QtCore.pyqtSignal()
+    settings_requested = QtCore.pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__("Controls", parent)
@@ -52,6 +53,11 @@ class MotorControlWidget(QtWidgets.QGroupBox):
         self.combo_step.setFixedWidth(90)
         self.combo_step.setToolTip("Jog step size")
         self.layout.addWidget(self.combo_step, 1, 1)
+
+        self.btn_settings = QtWidgets.QPushButton("Settings")
+        self.btn_settings.setToolTip("Open settings")
+        self.btn_settings.clicked.connect(lambda: self.settings_requested.emit())
+        self.layout.addWidget(self.btn_settings, 1, 2)
         
         self.btn_measure = QtWidgets.QPushButton("Measure D4σ")
         self.btn_measure.setProperty("class", "accent")

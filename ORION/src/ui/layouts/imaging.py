@@ -12,6 +12,7 @@ from ORION.src.ui.widgets.readouts import ReadoutWidget
 from ORION.src.ui.widgets.motor_control import MotorControlWidget
 
 class ImagingPage(QtWidgets.QWidget):
+    settings_requested = QtCore.pyqtSignal()
     def __init__(self, systemList: list, config: Config):
         # systemList: [LaserSystem, HardwareWorker] passed from MainWindow
         super().__init__()
@@ -109,11 +110,12 @@ class ImagingPage(QtWidgets.QWidget):
         # Widget Specific Connections
         self.controls.move_requested.connect(self.on_move_to_requested)
         self.controls.find_beam_requested.connect(self.on_find_beam)
-        self.controls.find_focus_requested.connect(self.on_find_focus)
+        self.controls.find_focus_requested.connect(self.on_find_focus_clicked)
         self.controls.measure_requested.connect(self.on_measure_clicked)
         self.controls.step_requested.connect(self.on_step_requested)
         self.controls.set_safe_requested.connect(self.on_set_safe)
         self.controls.reset_safe_requested.connect(self.on_reset_safe)
+        self.controls.settings_requested.connect(lambda: self.settings_requested.emit())
         
         # Connect indicator toggle
         self.controls.check_overlay.stateChanged.connect(self.on_overlay_toggled)
@@ -131,6 +133,7 @@ class ImagingPage(QtWidgets.QWidget):
         
         self.beam_overlay = None
         self.last_beam_params = None
+        self._current_state = "LIVE"
         self.set_ui_state("LIVE")
 
     def on_overlay_toggled(self, checked):
@@ -182,12 +185,23 @@ class ImagingPage(QtWidgets.QWidget):
         self.set_ui_state(state)
 
     def set_ui_state(self, state: str):
+        self._current_state = state
         busy = state in {"MEASURING", "SEARCHING", "SCANNING", "STOPPING"}
         reason = f"Disabled while {state.lower()}." if busy else ""
         self.controls.btn_find_beam.setEnabled(not busy)
         self.controls.btn_find_beam.setToolTip(reason or "Measure once and center the beam in view")
-        self.controls.btn_find_focus.setEnabled(not busy)
-        self.controls.btn_find_focus.setToolTip(reason or "Run autofocus search between 0 and Safe Z")
+        if state == "SEARCHING":
+            self.controls.btn_find_focus.setEnabled(True)
+            self.controls.btn_find_focus.setText("Stop Focus")
+            self.controls.btn_find_focus.setToolTip("Stop the current autofocus search")
+        elif state == "STOPPING":
+            self.controls.btn_find_focus.setEnabled(False)
+            self.controls.btn_find_focus.setText("Stopping...")
+            self.controls.btn_find_focus.setToolTip("Stopping autofocus search")
+        else:
+            self.controls.btn_find_focus.setEnabled(not busy)
+            self.controls.btn_find_focus.setText("Find Focus")
+            self.controls.btn_find_focus.setToolTip(reason or "Run autofocus search between 0 and Safe Z")
         self.controls.btn_measure.setEnabled(not busy)
         self.controls.btn_measure.setToolTip(reason or "Take one beam measurement")
         self.controls.btn_back.setEnabled(not busy)
@@ -201,6 +215,14 @@ class ImagingPage(QtWidgets.QWidget):
         self.controls.txt_move_z.setEnabled(not busy)
         self.controls.txt_move_z.setToolTip(reason or "Target Z position in mm")
         self.controls.combo_step.setEnabled(not busy)
+
+    def apply_config_update(self):
+        # Reset ROI sizing to reflect any settings changes
+        try:
+            self.worker.orchestrator.roi.reset()
+        except Exception:
+            pass
+        self.update_status_msg("Settings applied.")
 
     def on_move_to_requested(self, val):
         if val < 0: val = 0.0
@@ -226,7 +248,11 @@ class ImagingPage(QtWidgets.QWidget):
         self._auto_center_requested = True
         self.worker.start_one_shot_measurement()
         
-    def on_find_focus(self):
+    def on_find_focus_clicked(self):
+        if self._current_state == "SEARCHING":
+            self.worker.request_stop()
+            return
+
         if not self._is_safe_set:
             QtWidgets.QMessageBox.warning(self, "Find Focus", "You MUST set a Safe Z limit first.\nMove to a safe maximum Z-dist and click 'Set safe Z'.")
             return
@@ -253,6 +279,7 @@ class ImagingPage(QtWidgets.QWidget):
         self.controls.lbl_safe_val.setText("---")
 
     def on_one_shot_finished(self, msg):
+        self.readouts.update_measurement(msg)
         # Update profiles if we have valid params
         if "D4s: 0.0" not in msg and self.last_beam_params:
             cx, cy, w, h, angle = self.last_beam_params

@@ -263,6 +263,10 @@ class CausticPage(QtWidgets.QWidget):
         self.btn_start_scan.setToolTip(reason or "Run scan across Start/End Z and auto-measure each point")
         self.btn_go_z.setEnabled(not busy)
         self.btn_go_z.setToolTip(reason or "Move stage to selected Z")
+
+    def apply_config_update(self):
+        # Update any UI ranges that depend on config
+        self.spin_step.setRange(self.config.SEARCH_TOLERANCE, 10.0)
         self.spin_move_z.setEnabled(not busy)
         self.spin_start.setEnabled(not busy)
         self.spin_end.setEnabled(not busy)

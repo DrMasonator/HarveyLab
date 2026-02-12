@@ -65,6 +65,8 @@ class HardwareWorker(QtCore.QThread):
         self.command_queue.put(("CHARACTERIZE", scan_points))
 
     def start_one_shot_measurement(self):
+        # Clear any prior stop request so a new measurement can proceed
+        self.stop_requested = False
         self.command_queue.put(("MEASURE_ONCE", None))
 
     def stop(self):
@@ -103,6 +105,7 @@ class HardwareWorker(QtCore.QThread):
                         self._set_state("LIVE")
                         self.target_z = self.system.current_position
                     elif cmd == "MEASURE_ONCE":
+                        self.stop_requested = False
                         self._set_state("MEASURING")
                         res = self.orchestrator.robust_measure_optical(
                             skip_ae=self.config.FIND_BEAM_SKIP_AE,

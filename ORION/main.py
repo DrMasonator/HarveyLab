@@ -8,6 +8,7 @@ from ORION.src.drivers.hardware import RealLaserSystem, MockLaserSystem, LaserSy
 from ORION.src.core.worker import HardwareWorker
 from ORION.src.ui.layouts.imaging import ImagingPage
 from ORION.src.ui.layouts.caustic import CausticPage
+from ORION.src.ui.layouts.settings import SettingsPage
 
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self, system: LaserSystem, config: Config):
@@ -30,6 +31,7 @@ class MainWindow(QtWidgets.QMainWindow):
         sys_list = [self.system, self.worker]
 
         self.imaging_page = ImagingPage(sys_list, config)
+        self.imaging_page.settings_requested.connect(self.on_settings)
         self.stack.addWidget(self.imaging_page)
 
         self.caustic_page = CausticPage(sys_list, config)
@@ -40,13 +42,18 @@ class MainWindow(QtWidgets.QMainWindow):
         layout.addWidget(QtWidgets.QLabel("MEMS Control Page - Coming Soon"))
         self.stack.addWidget(self.mems_page)
 
+        self.settings_page = SettingsPage(config)
+        self.settings_page.settings_applied.connect(self.on_settings_applied)
+        self.settings_page.back_requested.connect(self.on_back_from_settings)
+        self.stack.addWidget(self.settings_page)
+
     def init_menu(self):
         menubar = self.menuBar()
 
         orion_menu = menubar.addMenu("ORION")
         orion_menu.addAction("New")
         orion_menu.addAction("Reset", self.on_reset)
-        orion_menu.addAction("Settings")
+        orion_menu.addAction("Settings", self.on_settings)
         orion_menu.addSeparator()
         orion_menu.addAction("Quit", self.close)
         
@@ -61,6 +68,19 @@ class MainWindow(QtWidgets.QMainWindow):
     def on_reset(self):
         QtWidgets.QMessageBox.information(self, "Reset", "System reset triggered.")
 
+    def on_settings(self):
+        if hasattr(self, "settings_page"):
+            self.stack.setCurrentWidget(self.settings_page)
+
+    def on_back_from_settings(self):
+        self.stack.setCurrentIndex(0)
+
+    def on_settings_applied(self):
+        if hasattr(self, "imaging_page"):
+            self.imaging_page.apply_config_update()
+        if hasattr(self, "caustic_page"):
+            self.caustic_page.apply_config_update()
+
     def closeEvent(self, event):
         print("Closing application...")
         self.worker.stop()
@@ -72,7 +92,7 @@ def main():
     parser.add_argument("--sim", action="store_true", help="Run in simulation mode")
     args = parser.parse_args()
     
-    config = Config()
+    config = Config.load()
     
     if args.sim:
         system = MockLaserSystem(config)

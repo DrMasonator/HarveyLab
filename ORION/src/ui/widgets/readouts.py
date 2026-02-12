@@ -20,11 +20,16 @@ class ReadoutWidget(QtWidgets.QGroupBox):
         self.lbl_exposure = QtWidgets.QLabel("1.0 ms")
         self.layout.addWidget(QtWidgets.QLabel("Exposure:"), 2, 0)
         self.layout.addWidget(self.lbl_exposure, 2, 1)
-        
+
+        self.lbl_measure = QtWidgets.QLabel("---")
+        self.lbl_measure.setStyleSheet(f"font-size: 12px; color: {HEX_TEXT_DIM};")
+        self.layout.addWidget(QtWidgets.QLabel("Last Measurement:"), 3, 0)
+        self.layout.addWidget(self.lbl_measure, 3, 1)
+
         self.lbl_status = QtWidgets.QLabel("Ready")
         self.lbl_status.setStyleSheet("color: #4CAF50; font-weight: bold;")
-        self.layout.addWidget(QtWidgets.QLabel("Status:"), 3, 0)
-        self.layout.addWidget(self.lbl_status, 3, 1)
+        self.layout.addWidget(QtWidgets.QLabel("Status:"), 4, 0)
+        self.layout.addWidget(self.lbl_status, 4, 1)
 
         # Styles removed (handled by global theme)
 
@@ -56,3 +61,13 @@ class ReadoutWidget(QtWidgets.QGroupBox):
             self.lbl_status.setStyleSheet(f"color: {HEX_WARNING}; font-weight: bold;")
         else:
             self.lbl_status.setStyleSheet(f"color: {HEX_SUCCESS}; font-weight: bold;")
+
+    def update_measurement(self, msg: str):
+        if not msg:
+            return
+        self.lbl_measure.setText(msg)
+        m = msg.lower()
+        if "d4s: 0.0" in m or "fail" in m or "not find" in m:
+            self.lbl_measure.setStyleSheet(f"font-size: 12px; color: {HEX_WARNING};")
+        else:
+            self.lbl_measure.setStyleSheet(f"font-size: 12px; color: {HEX_TEXT};")

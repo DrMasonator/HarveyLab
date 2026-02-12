@@ -1,4 +1,7 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
+from pathlib import Path
+from typing import Optional
+import json
 
 @dataclass
 class Config:
@@ -42,3 +45,38 @@ class Config:
     ROI_SHRINK_THRESHOLD: float = 0.15  # Shrink if 3*D4s < threshold * ROI
     ROI_ADAPT_HYSTERESIS_FRAMES: int = 3
     ROI_EDGE_PEAK_FRACTION: float = 0.03  # Expand if ROI border has >3% of peak
+
+    @staticmethod
+    def default_path() -> Path:
+        return Path.home() / ".orion_config.json"
+
+    @classmethod
+    def load(cls, path: Optional[Path] = None) -> "Config":
+        cfg = cls()
+        cfg_path = path or cls.default_path()
+        if cfg_path.exists():
+            try:
+                data = json.loads(cfg_path.read_text())
+                for f in fields(cfg):
+                    if f.name not in data:
+                        continue
+                    raw = data[f.name]
+                    # Basic type coercion
+                    if f.type is bool:
+                        val = bool(raw)
+                    elif f.type is int:
+                        val = int(raw)
+                    elif f.type is float:
+                        val = float(raw)
+                    else:
+                        val = raw
+                    setattr(cfg, f.name, val)
+            except Exception:
+                # If config load fails, fall back to defaults
+                pass
+        return cfg
+
+    def save(self, path: Optional[Path] = None) -> None:
+        cfg_path = path or self.default_path()
+        data = {f.name: getattr(self, f.name) for f in fields(self)}
+        cfg_path.write_text(json.dumps(data, indent=2, sort_keys=True))
