@@ -1,13 +1,20 @@
+"""Caustic measurement and analysis page."""
+
+from __future__ import annotations
+
+import logging
+
 import numpy as np
-from PyQt5 import QtWidgets, QtCore, QtGui
 import pyqtgraph as pg
+from PyQt5 import QtCore, QtGui, QtWidgets
 
 from ORION.config import Config
 from ORION.src.drivers.hardware import LaserSystem
-from ORION.src.core.worker import HardwareWorker
 from ORION.src.core.analysis import BeamAnalyzer
-from ORION.src.core.worker import WorkerMode
+from ORION.src.core.worker import WorkerMode, WorkerState
 from ORION.src.ui.theme import HEX_BG_DARK, HEX_SUCCESS
+
+logger = logging.getLogger(__name__)
 
 class CausticPage(QtWidgets.QWidget):
     def __init__(self, systemList: list, config: Config):
@@ -17,14 +24,13 @@ class CausticPage(QtWidgets.QWidget):
         self.config = config
         self.analyzer = BeamAnalyzer(config)
         
-        self.data_points = [] # List of dict: {'z': float, 'dx': float, 'dy': float, 'deff': float}
+        self.data_points = []  # [{'z': float, 'dx': float, 'dy': float, 'deff': float}]
         self.fit_results_x = {}
         self.fit_results_y = {}
         
-        # State
         self.current_z = 0.0
         self.expecting_measurement = False
-        self.current_state = "LIVE"
+        self.current_state = WorkerState.LIVE
         
         self.init_ui()
         self.init_connections()
@@ -206,7 +212,7 @@ class CausticPage(QtWidgets.QWidget):
         self.worker.overlay_update.connect(self.handle_overlay_update)
         self.worker.one_shot_finished.connect(self.handle_oneshot_finished)
         self.worker.measurement_taken.connect(self.handle_measurement_taken)
-        self.on_state_changed("LIVE")
+        self.on_state_changed(WorkerState.LIVE)
         
     def on_stats_update(self, max_val, d4s, z_pos, exposure):
         self.current_z = z_pos
@@ -255,7 +261,7 @@ class CausticPage(QtWidgets.QWidget):
 
     def on_state_changed(self, state: str):
         self.current_state = state
-        busy = state in {"MEASURING", "SEARCHING", "SCANNING", "STOPPING"}
+        busy = state in {WorkerState.MEASURING, WorkerState.SEARCHING, WorkerState.SCANNING, WorkerState.STOPPING}
         reason = f"Disabled while {state.lower()}." if busy else ""
         self.btn_measure.setEnabled(not busy)
         self.btn_measure.setToolTip(reason or "Measure and add one point at current Z")

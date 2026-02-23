@@ -1,4 +1,8 @@
-from PyQt5 import QtWidgets, QtCore
+"""Settings page for configuring runtime parameters."""
+
+from __future__ import annotations
+
+from PyQt5 import QtCore, QtWidgets
 
 from ORION.config import Config
 
@@ -353,23 +357,6 @@ class SettingsPage(QtWidgets.QWidget):
         defaults = Config()
         self.load_from_config(defaults)
 
-    def _normalize(self):
-        if self.config.MIN_EXPOSURE_MS > self.config.MAX_EXPOSURE_MS:
-            self.config.MIN_EXPOSURE_MS, self.config.MAX_EXPOSURE_MS = (
-                self.config.MAX_EXPOSURE_MS,
-                self.config.MIN_EXPOSURE_MS,
-            )
-        if self.config.TARGET_BRIGHTNESS_MIN > self.config.TARGET_BRIGHTNESS_MAX:
-            self.config.TARGET_BRIGHTNESS_MIN, self.config.TARGET_BRIGHTNESS_MAX = (
-                self.config.TARGET_BRIGHTNESS_MAX,
-                self.config.TARGET_BRIGHTNESS_MIN,
-            )
-        if self.config.ROI_MIN_SIZE_PX > self.config.ROI_MAX_SIZE_PX:
-            self.config.ROI_MIN_SIZE_PX, self.config.ROI_MAX_SIZE_PX = (
-                self.config.ROI_MAX_SIZE_PX,
-                self.config.ROI_MIN_SIZE_PX,
-            )
-
     def on_save(self):
         for key, widget in self.fields.items():
             if isinstance(widget, QtWidgets.QCheckBox):
@@ -380,7 +367,7 @@ class SettingsPage(QtWidgets.QWidget):
                 val = widget.value()
             setattr(self.config, key, val)
 
-        self._normalize()
+        self.config.normalize()
         self.config.save()
         self.load_from_config(self.config)
         self.settings_applied.emit()

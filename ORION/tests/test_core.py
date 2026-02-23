@@ -13,6 +13,7 @@ from ORION.src.core.processing import ImageProcessor, ExposureController
 from ORION.src.core.analysis import BeamAnalyzer
 from ORION.src.core.roi import ROIManager
 from ORION.src.core.algorithms import MeasurementOrchestrator, FocusOptimizer
+from ORION.src.core.types import BeamAnalysis
 
 
 class FakeLaserSystem:
@@ -176,19 +177,19 @@ class TestBeamAnalyzer(unittest.TestCase):
         analyzer = BeamAnalyzer(cfg)
         sigma = 3.0
         img = make_gaussian(h=64, w=64, cx=32, cy=32, sigma=sigma, peak=200)
-        d4s, dx, dy, phi, cx, cy, *_ = analyzer.analyze_beam(img, float(img.max()), cfg.PIXEL_SIZE_UM)
-        self.assertGreater(d4s, 0.0)
+        res = analyzer.analyze_beam(img, float(img.max()), cfg.PIXEL_SIZE_UM)
+        self.assertGreater(res.d4s_eff_um, 0.0)
         expected = 4.0 * sigma * cfg.PIXEL_SIZE_UM
-        self.assertTrue(0.5 * expected <= d4s <= 1.8 * expected)
-        self.assertAlmostEqual(cx, 32.0, delta=2.0)
-        self.assertAlmostEqual(cy, 32.0, delta=2.0)
+        self.assertTrue(0.5 * expected <= res.d4s_eff_um <= 1.8 * expected)
+        self.assertAlmostEqual(res.centroid_x_px, 32.0, delta=2.0)
+        self.assertAlmostEqual(res.centroid_y_px, 32.0, delta=2.0)
 
     def test_empty_image_returns_zero(self):
         cfg = Config()
         analyzer = BeamAnalyzer(cfg)
         img = np.zeros((32, 32), dtype=np.uint8)
         res = analyzer.analyze_beam(img, 0.0, cfg.PIXEL_SIZE_UM)
-        self.assertEqual(res[0], 0.0)
+        self.assertEqual(res.d4s_eff_um, 0.0)
 
 
 class TestMeasurementOrchestrator(unittest.TestCase):
@@ -206,9 +207,9 @@ class TestMeasurementOrchestrator(unittest.TestCase):
         orch = MeasurementOrchestrator(cfg, system, analyzer, processor, exposure, worker=None)
 
         res = orch.robust_measure_optical(skip_ae=True, average_count=3)
-        self.assertGreater(res[0], 0.0)
-        self.assertAlmostEqual(res[4], 32.0, delta=2.0)
-        self.assertAlmostEqual(res[5], 32.0, delta=2.0)
+        self.assertGreater(res.d4s_eff_um, 0.0)
+        self.assertAlmostEqual(res.centroid_x_px, 32.0, delta=2.0)
+        self.assertAlmostEqual(res.centroid_y_px, 32.0, delta=2.0)
 
 
 class TestFocusOptimizer(unittest.TestCase):
@@ -226,7 +227,7 @@ class TestFocusOptimizer(unittest.TestCase):
                 # Convex function with minimum at z=2.0
                 z = self.sys.current_position
                 val = (z - 2.0) ** 2 + 1.0
-                return (val, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+                return BeamAnalysis(val, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
 
         optimizer = FocusOptimizer(cfg, system, StubOrchestrator(system), worker=None)
         optimizer.run_golden_section_search(0.0, 6.0)

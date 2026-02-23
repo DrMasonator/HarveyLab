@@ -1,4 +1,6 @@
-from PyQt5 import QtWidgets, QtGui
+import sys
+
+from PyQt5 import QtGui, QtWidgets
 
 # Professional Dark Theme Colors (Restored Custom Palette)
 COLOR_BG_DARK = "#1e1e1e"        # Main Background
@@ -37,13 +39,20 @@ def apply_theme(app: QtWidgets.QApplication):
     """Applies the global QSS stylesheet to the application."""
     
     # We do NOT use Fusion style here, as user preferred the custom look.
-    
+
+    if sys.platform.startswith("win"):
+        font_stack = '"Segoe UI", "Arial", sans-serif'
+    elif sys.platform == "darwin":
+        font_stack = '"SF Pro Text", "Helvetica Neue", "Arial", sans-serif'
+    else:
+        font_stack = '"DejaVu Sans", "Liberation Sans", "Arial", sans-serif'
+
     qss = f"""
     /* --- GLOBAL --- */
     QMainWindow, QWidget {{
         background-color: {COLOR_BG_DARK};
         color: {COLOR_TEXT};
-        font-family: "Segoe UI", "Roboto", "Helvetica", sans-serif;
+        font-family: {font_stack};
         font-size: 13px;
     }}
     

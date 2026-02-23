@@ -33,7 +33,7 @@ def test_perf():
     
     if end - start > 1.0:
         print("FAIL: Too slow!")
-    elif res[0] == 0:
+    elif res.d4s_eff_um == 0:
         print("FAIL: Beam not found!")
     else:
         print("PASS: Optimized!")
@@ -53,7 +53,7 @@ def test_perf():
     print(f"Small Beam Analyze Time: {end - start:.4f} seconds")
     print(f"Result: {res}")
     
-    if res[0] > 0:
+    if res.d4s_eff_um > 0:
         print("PASS: Small beam detected!")
     else:
         print("FAIL: Small beam missed!")
@@ -73,7 +73,7 @@ def test_perf():
     
     # Expected D4s pixels ~ 4 * sigma = 800
     expected_d4s_px = 4 * sigma_large
-    measured_d4s_px = res[6] # d4_x_px
+    measured_d4s_px = res.d4s_x_px
     
     print(f"Large Beam Analyze Time: {end - start:.4f} seconds")
     print(f"Measured D4s (px): {measured_d4s_px:.1f} (Expected ~{expected_d4s_px})")

@@ -1,14 +1,24 @@
-import sys
 import argparse
+import logging
+import sys
+
 from PyQt5 import QtWidgets
 import pyqtgraph as pg
 
 from ORION.config import Config
-from ORION.src.drivers.hardware import RealLaserSystem, MockLaserSystem, LaserSystem
 from ORION.src.core.worker import HardwareWorker
-from ORION.src.ui.layouts.imaging import ImagingPage
+from ORION.src.drivers.hardware import MockLaserSystem, RealLaserSystem, LaserSystem
 from ORION.src.ui.layouts.caustic import CausticPage
+from ORION.src.ui.layouts.imaging import ImagingPage
 from ORION.src.ui.layouts.settings import SettingsPage
+
+
+def configure_logging() -> None:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
+
 
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self, system: LaserSystem, config: Config):
@@ -27,7 +37,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self.stack = QtWidgets.QStackedWidget()
         self.setCentralWidget(self.stack)
 
-        # Shared system/worker access
         sys_list = [self.system, self.worker]
 
         self.imaging_page = ImagingPage(sys_list, config)
@@ -47,7 +56,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.settings_page.back_requested.connect(self.on_back_from_settings)
         self.stack.addWidget(self.settings_page)
 
-    def init_menu(self):
+    def init_menu(self) -> None:
         menubar = self.menuBar()
 
         orion_menu = menubar.addMenu("ORION")
@@ -56,59 +65,68 @@ class MainWindow(QtWidgets.QMainWindow):
         orion_menu.addAction("Settings", self.on_settings)
         orion_menu.addSeparator()
         orion_menu.addAction("Quit", self.close)
-        
+
         window_menu = menubar.addMenu("Window")
         window_menu.addAction("Imaging", lambda: self.stack.setCurrentIndex(0))
         window_menu.addAction("Caustic", lambda: self.stack.setCurrentIndex(1))
         window_menu.addAction("MEMS", lambda: self.stack.setCurrentIndex(2))
-        
+
         help_menu = menubar.addMenu("Help")
         help_menu.addAction("About")
 
-    def on_reset(self):
+    def on_reset(self) -> None:
         QtWidgets.QMessageBox.information(self, "Reset", "System reset triggered.")
 
-    def on_settings(self):
+    def on_settings(self) -> None:
         if hasattr(self, "settings_page"):
             self.stack.setCurrentWidget(self.settings_page)
 
-    def on_back_from_settings(self):
+    def on_back_from_settings(self) -> None:
         self.stack.setCurrentIndex(0)
 
-    def on_settings_applied(self):
+    def on_settings_applied(self) -> None:
         if hasattr(self, "imaging_page"):
             self.imaging_page.apply_config_update()
         if hasattr(self, "caustic_page"):
             self.caustic_page.apply_config_update()
 
-    def closeEvent(self, event):
-        print("Closing application...")
+    def closeEvent(self, event) -> None:
+        logging.info("Closing application...")
         self.worker.stop()
         self.system.close()
         event.accept()
 
-def main():
+
+def main() -> None:
+    configure_logging()
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--sim", action="store_true", help="Run in simulation mode")
     args = parser.parse_args()
-    
+
     config = Config.load()
-    
-    if args.sim:
-        system = MockLaserSystem(config)
-    else:
-        system = RealLaserSystem(config)
-        
+
+    try:
+        if args.sim:
+            system = MockLaserSystem(config)
+        else:
+            system = RealLaserSystem(config)
+    except Exception as exc:
+        logging.exception("Failed to initialize hardware")
+        sys.exit(1)
+
     app = QtWidgets.QApplication(sys.argv)
-    pg.setConfigOptions(imageAxisOrder='row-major') 
-    
+    pg.setConfigOptions(imageAxisOrder="row-major")
+
     from ORION.src.ui.theme import apply_theme
+
     apply_theme(app)
-    
+
     window = MainWindow(system, config)
     window.show()
-    
+
     sys.exit(app.exec_())
+
 
 if __name__ == "__main__":
     main()

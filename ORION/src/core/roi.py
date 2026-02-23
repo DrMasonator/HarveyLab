@@ -1,3 +1,7 @@
+"""ROI tracking and adaptive resizing for beam analysis."""
+
+from __future__ import annotations
+
 import numpy as np
 
 from ORION.config import Config
@@ -10,8 +14,8 @@ class ROIManager:
         self.force_relock = True
         self.use_full_frame = False
         self.full_frame_cooldown = 0
-        self.center_x = None
-        self.center_y = None
+        self.center_x: float | None = None
+        self.center_y: float | None = None
         self.roi_w = int(config.ROI_MIN_SIZE_PX)
         self.roi_h = int(config.ROI_MIN_SIZE_PX)
         self.expand_votes = 0
@@ -49,7 +53,7 @@ class ROIManager:
         x0 = int(bx * block)
         y0 = int(by * block)
 
-        sub = img[y0:min(y0 + block, h), x0:min(x0 + block, w)]
+        sub = img[y0 : min(y0 + block, h), x0 : min(x0 + block, w)]
         sy, sx = np.unravel_index(np.argmax(sub), sub.shape)
         return float(x0 + sx), float(y0 + sy)
 
@@ -57,8 +61,12 @@ class ROIManager:
         self, cx: float, cy: float, size_w: int, size_h: int, shape: tuple[int, int]
     ) -> tuple[int, int, int, int]:
         h, w = shape
-        size_w = int(np.clip(size_w, self.config.ROI_MIN_SIZE_PX, min(self.config.ROI_MAX_SIZE_PX, w)))
-        size_h = int(np.clip(size_h, self.config.ROI_MIN_SIZE_PX, min(self.config.ROI_MAX_SIZE_PX, h)))
+        size_w = int(
+            np.clip(size_w, self.config.ROI_MIN_SIZE_PX, min(self.config.ROI_MAX_SIZE_PX, w))
+        )
+        size_h = int(
+            np.clip(size_h, self.config.ROI_MIN_SIZE_PX, min(self.config.ROI_MAX_SIZE_PX, h))
+        )
         half_w = size_w // 2
         half_h = size_h // 2
 
@@ -66,9 +74,7 @@ class ROIManager:
         y0 = int(round(cy)) - half_h
         x0 = max(0, min(x0, w - size_w))
         y0 = max(0, min(y0, h - size_h))
-        x1 = x0 + size_w
-        y1 = y0 + size_h
-        return x0, y0, x1, y1
+        return x0, y0, x0 + size_w, y0 + size_h
 
     def get_crop(self, img: np.ndarray) -> tuple[np.ndarray, tuple[int, int]]:
         h, w = img.shape
@@ -86,7 +92,9 @@ class ROIManager:
             self.expand_votes = 0
             self.shrink_votes = 0
 
-        x0, y0, x1, y1 = self._clamp_bounds(self.center_x, self.center_y, self.roi_w, self.roi_h, (h, w))
+        x0, y0, x1, y1 = self._clamp_bounds(
+            self.center_x, self.center_y, self.roi_w, self.roi_h, (h, w)
+        )
         return img[y0:y1, x0:x1], (x0, y0)
 
     def on_measurement(self, global_cx: float, global_cy: float, d4s_x_px: float, d4s_y_px: float) -> None:
@@ -115,8 +123,12 @@ class ROIManager:
             self.shrink_votes = 0
 
         votes_needed = int(max(1, self.config.ROI_ADAPT_HYSTERESIS_FRAMES))
-        target_w = int(np.clip(np.ceil(5.0 * d4s_x_px), self.config.ROI_MIN_SIZE_PX, self.config.ROI_MAX_SIZE_PX))
-        target_h = int(np.clip(np.ceil(5.0 * d4s_y_px), self.config.ROI_MIN_SIZE_PX, self.config.ROI_MAX_SIZE_PX))
+        target_w = int(
+            np.clip(np.ceil(5.0 * d4s_x_px), self.config.ROI_MIN_SIZE_PX, self.config.ROI_MAX_SIZE_PX)
+        )
+        target_h = int(
+            np.clip(np.ceil(5.0 * d4s_y_px), self.config.ROI_MIN_SIZE_PX, self.config.ROI_MAX_SIZE_PX)
+        )
 
         if self.expand_votes >= votes_needed:
             self.roi_w = max(int(self.roi_w * 1.30), target_w)
@@ -132,14 +144,16 @@ class ROIManager:
         if self.use_full_frame and span_x < (self.roi_w * 0.2) and span_y < (self.roi_h * 0.2):
             self.use_full_frame = False
         if span_x > (self.roi_w * 0.55) or span_y > (self.roi_h * 0.55):
-            # Enter full-frame temporarily when sizing confidence is low.
             self.full_frame_cooldown = max(self.full_frame_cooldown, 3)
 
     def on_border_signal(self) -> None:
-        # Border energy indicates clipping; expand immediately and force a full-frame pass.
         prev_w, prev_h = self.roi_w, self.roi_h
-        self.roi_w = int(np.clip(int(self.roi_w * 1.40), self.config.ROI_MIN_SIZE_PX, self.config.ROI_MAX_SIZE_PX))
-        self.roi_h = int(np.clip(int(self.roi_h * 1.40), self.config.ROI_MIN_SIZE_PX, self.config.ROI_MAX_SIZE_PX))
+        self.roi_w = int(
+            np.clip(int(self.roi_w * 1.40), self.config.ROI_MIN_SIZE_PX, self.config.ROI_MAX_SIZE_PX)
+        )
+        self.roi_h = int(
+            np.clip(int(self.roi_h * 1.40), self.config.ROI_MIN_SIZE_PX, self.config.ROI_MAX_SIZE_PX)
+        )
         self.full_frame_cooldown = max(self.full_frame_cooldown, 3)
         if self.roi_w == prev_w and self.roi_h == prev_h:
             self.use_full_frame = True
